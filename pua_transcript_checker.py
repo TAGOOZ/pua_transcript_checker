@@ -286,13 +286,13 @@ def check_transcript():
             for course in result['courses']:
                 log(f"  - {course['code']}: {course['title']} ({course['grade']})")
             
-            # Send Telegram notification if 2025 Fall is found
+            # Send Telegram notification always
+            telegram_message = format_telegram_message(result)
+            send_telegram_notification(telegram_message)
+            
             if result['is_target']:
-                telegram_message = format_telegram_message(result)
-                send_telegram_notification(telegram_message)
                 return True  # Target found!
             else:
-                log("Not sending notification - waiting for 2025 Fall")
                 return False
         else:
             log("No transcript data found")
