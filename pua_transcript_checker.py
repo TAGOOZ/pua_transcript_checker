@@ -53,13 +53,37 @@ def log(message):
     print(f"[{timestamp}] {message}")
 
 
+def retry_request(session, method, url, max_retries=3, **kwargs):
+    """Make HTTP request with retry logic."""
+    for attempt in range(max_retries):
+        try:
+            if method == 'GET':
+                response = session.get(url, **kwargs)
+            else:
+                response = session.post(url, **kwargs)
+            
+            if response.status_code in [503, 502, 500]:
+                wait_time = (attempt + 1) * 10  # 10s, 20s, 30s
+                log(f"[!] Server error {response.status_code}, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
+                continue
+            
+            return response
+        except Exception as e:
+            wait_time = (attempt + 1) * 10
+            log(f"[!] Request failed: {e}, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+            time.sleep(wait_time)
+    
+    return None
+
+
 def get_login_tokens(session):
     """Fetch the login page and extract ASP.NET form tokens."""
     log("Fetching login page to get tokens...")
-    response = session.get(LOGIN_URL, headers=HEADERS, timeout=30)
+    response = retry_request(session, 'GET', LOGIN_URL, headers=HEADERS, timeout=30)
     
-    if response.status_code != 200:
-        log(f"[!] Failed to fetch login page: {response.status_code}")
+    if not response or response.status_code != 200:
+        log(f"[!] Failed to fetch login page after retries")
         return None
     
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -99,7 +123,11 @@ def login(session, tokens):
         'ctl00$mainContent$lvLoginUser$ucLoginUser$lcLoginUser$LoginButton': 'Log In'
     }
     
-    response = session.post(LOGIN_URL, headers=HEADERS, data=form_data, allow_redirects=True, timeout=30)
+    response = retry_request(session, 'POST', LOGIN_URL, headers=HEADERS, data=form_data, allow_redirects=True, timeout=30)
+    
+    if not response:
+        log("[!] Login request failed after retries")
+        return False
     
     if response.status_code == 200:
         if 'Login.aspx' in response.url and 'Please check your User Name' in response.text:
@@ -116,10 +144,10 @@ def get_transcripts(session):
     """Fetch the transcripts page."""
     log("Fetching transcripts page...")
     
-    response = session.get(TRANSCRIPT_URL, headers=HEADERS, timeout=30)
+    response = retry_request(session, 'GET', TRANSCRIPT_URL, headers=HEADERS, timeout=30)
     
-    if response.status_code != 200:
-        log(f"[!] Failed to fetch transcripts: {response.status_code}")
+    if not response or response.status_code != 200:
+        log(f"[!] Failed to fetch transcripts after retries")
         return None
     
     if 'Login.aspx' in response.url:
