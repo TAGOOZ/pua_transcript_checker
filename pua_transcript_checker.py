@@ -158,9 +158,10 @@ def get_transcripts(session):
     return response.text
 
 
-def extract_courses_from_header(header):
-    """Extract courses from a semester header element."""
+def extract_semester_data(header):
+    """Extract courses and GPA from a semester section."""
     courses = []
+    gpa = None
     
     parent_div = header.find_parent('div')
     if parent_div:
@@ -175,16 +176,28 @@ def extract_courses_from_header(header):
                         course_code = cells[0].get_text(strip=True)
                         course_title = cells[1].get_text(strip=True)
                         grade = cells[3].get_text(strip=True) if len(cells) > 3 else ''
-                        credits = cells[4].get_text(strip=True) if len(cells) > 4 else ''
                         
                         if course_code:
                             courses.append({
                                 'code': course_code,
                                 'title': course_title,
-                                'grade': grade,
-                                'credits': credits
+                                'grade': grade
                             })
-    return courses
+    
+    # Find the GPA table (after courses table)
+    # Look for "Overall:" row with GPA value
+    all_tables = parent_div.find_next_siblings('table')
+    for table in all_tables:
+        overall_row = table.find('td', string=re.compile(r'Overall:', re.IGNORECASE))
+        if overall_row:
+            row = overall_row.find_parent('tr')
+            if row:
+                cells = row.find_all('td')
+                if len(cells) >= 8:  # GPA is the last column
+                    gpa = cells[-1].get_text(strip=True)
+                    break
+    
+    return courses, gpa
 
 
 def parse_transcript_courses(html_content):
@@ -196,8 +209,8 @@ def parse_transcript_courses(html_content):
     
     if fall_2025_header:
         log("🎉 Found '2025 Fall' section!")
-        courses = extract_courses_from_header(fall_2025_header)
-        return {'semester': '2025 Fall', 'courses': courses, 'is_target': True}
+        courses, gpa = extract_semester_data(fall_2025_header)
+        return {'semester': '2025 Fall', 'courses': courses, 'gpa': gpa, 'is_target': True}
     
     # 2025 Fall not found, check for 2025 Spring
     log("'2025 Fall' NOT found yet!")
@@ -206,8 +219,8 @@ def parse_transcript_courses(html_content):
     
     if spring_2025_header:
         log("Found '2025 Spring' - Fall semester not released yet")
-        courses = extract_courses_from_header(spring_2025_header)
-        return {'semester': '2025 Spring', 'courses': courses, 'is_target': False}
+        courses, gpa = extract_semester_data(spring_2025_header)
+        return {'semester': '2025 Spring', 'courses': courses, 'gpa': gpa, 'is_target': False}
     
     return None
 
@@ -247,8 +260,10 @@ def format_telegram_message(result):
         message += f"<i>Latest: {result['semester']}</i>\n\n"
     
     for course in result['courses']:
-        message += f"<b>{course['code']}</b> - {course['title']}\n"
-        message += f"   Grade: {course['grade']} | Credits: {course['credits']}\n\n"
+        message += f"<b>{course['code']}</b> - {course['title']}: <b>{course['grade']}</b>\n"
+    
+    if result.get('gpa'):
+        message += f"\n📊 <b>Overall GPA: {result['gpa']}</b>"
     
     return message
 
