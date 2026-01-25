@@ -6,10 +6,6 @@ on:
 jobs:
   test-call:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        run_number: [1, 2, 3, 4, 5, 6]
-      max-parallel: 1  # Run sequentially to space them out
     
     steps:
       - name: Checkout code
@@ -23,67 +19,69 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Test phone call (Run ${{ matrix.run_number }})
+      - name: Test phone call
         run: |
           cat << 'EOF' | python3
           import requests
-          import random
           import hashlib
           import time
 
-          print(f"Test run ${{ matrix.run_number }} of 6")
+          print("Testing phone call with proper fingerprinting...")
           print("=" * 50)
 
-          url = "https://callmyphone.org/do-call"
+          phone_number = "+201211310357"
+          phone_encoded = "%2B201211310357"
 
-          # Generate unique fingerprints for each run
-          fgp = str(int(time.time() * 1000) + random.randint(1000, 9999))
-          fgp2 = hashlib.md5(f"{fgp}{random.random()}".encode()).hexdigest()
-          uid = f"{random.randint(10000000,99999999):08x}-{random.randint(1000,9999):04x}-{random.randint(1000,9999):04x}-{random.randint(1000,9999):04x}-{random.randint(100000000000,999999999999):012x}"
+          # Create fresh session to get uid from server
+          session = requests.Session()
 
-          print(f"Generated fgp: {fgp}")
-          print(f"Generated fgp2: {fgp2}")
-          print(f"Generated uid: {uid}")
+          print("Step 1: Getting fresh session...")
+          init_response = session.get(
+              "https://callmyphone.org/",
+              headers={
+                  "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                  "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/144.0.0.0"
+              },
+              timeout=30
+          )
+          print(f"Init response: {init_response.status_code}")
+          print(f"Cookies received: {dict(session.cookies)}")
 
-          headers = {
-              "accept": "application/json, text/javascript, */*; q=0.01",
-              "accept-language": "en-US,en;q=0.9",
-              "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-              "origin": "https://callmyphone.org",
-              "referer": "https://callmyphone.org/",
-              "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
-              "x-requested-with": "XMLHttpRequest"
-          }
+          # Generate fingerprint matching Fingerprint2 style
+          fgp = str(abs(hash(f"linux_chrome_{time.time()}")) % 10000000000)
+          fgp2 = hashlib.md5(f"{phone_number}{fgp}".encode()).hexdigest()
 
-          cookies = {
-              "remember-number-checked": "1",
-              "uid": uid,
-              "phone": "%2B201211310357"
-          }
+          print(f"Step 2: Generated fgp={fgp}, fgp2={fgp2}")
 
-          data = {
-              "phone": "+201211310357",
-              "browser": "undefined;",
-              "fgp": fgp,
-              "fgp2": fgp2,
-              "rememberNumber": "1"
-          }
+          # Make the call
+          print("Step 3: Making call request...")
+          response = session.post(
+              "https://callmyphone.org/do-call",
+              headers={
+                  "accept": "application/json, text/javascript, */*; q=0.01",
+                  "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+                  "origin": "https://callmyphone.org",
+                  "referer": "https://callmyphone.org/",
+                  "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/144.0.0.0",
+                  "x-requested-with": "XMLHttpRequest"
+              },
+              data={
+                  "phone": phone_encoded,
+                  "browser": "undefined;",
+                  "fgp": fgp,
+                  "fgp2": fgp2,
+                  "rememberNumber": "1"
+              },
+              timeout=30
+          )
 
-          try:
-              response = requests.post(url, headers=headers, cookies=cookies, data=data, timeout=30)
-              print(f"Response status: {response.status_code}")
-              print(f"Response body: {response.text[:500]}")
-              
-              if "exhausted" in response.text.lower() or "tomorrow" in response.text.lower():
-                  print("⚠️ RATE LIMITED!")
-              elif response.status_code == 200:
-                  print("✅ Phone call initiated!")
-              else:
-                  print("❌ Call failed")
-          except Exception as e:
-              print(f"Error: {e}")
+          print(f"Response status: {response.status_code}")
+          print(f"Response body: {response.text}")
+
+          if "limit_exceed" in response.text.lower() or "exhausted" in response.text.lower():
+              print("⚠️ RATE LIMITED")
+          elif response.status_code == 200 and "maxCallDuration" in response.text:
+              print("✅ Phone call initiated successfully!")
+          else:
+              print("❌ Call may have failed")
           EOF
-
-      - name: Wait between runs
-        if: matrix.run_number < 6
-        run: sleep 30

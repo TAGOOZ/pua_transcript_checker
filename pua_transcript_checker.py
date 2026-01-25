@@ -236,59 +236,74 @@ def send_phone_call():
     
     log("📞 Initiating phone call notification...")
     
-    import random
     import hashlib
     
-    url = "https://callmyphone.org/do-call"
+    phone_number = "+201211310357"
+    phone_encoded = "%2B201211310357"
     
-    # Generate unique fingerprints for each request to avoid rate limiting
-    fgp = str(int(time.time() * 1000) + random.randint(1000, 9999))
-    fgp2 = hashlib.md5(f'{fgp}{random.random()}'.encode()).hexdigest()
-    uid = f'{random.randint(10000000,99999999):08x}-{random.randint(1000,9999):04x}-{random.randint(1000,9999):04x}-{random.randint(1000,9999):04x}-{random.randint(100000000000,999999999999):012x}'
-    
-    log(f"📞 Using fingerprints: fgp={fgp[:10]}..., uid={uid[:8]}...")
-    
-    headers = {
-        'accept': 'application/json, text/javascript, */*; q=0.01',
-        'accept-language': 'en-US,en;q=0.9',
-        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'origin': 'https://callmyphone.org',
-        'referer': 'https://callmyphone.org/',
-        'sec-ch-ua': '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Linux"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin',
-        'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
-        'x-requested-with': 'XMLHttpRequest'
-    }
-    
-    cookies = {
-        'remember-number-checked': '1',
-        'uid': uid,
-        'phone': '%2B201211310357'
-    }
-    
-    data = {
-        'phone': '+201211310357',
-        'browser': 'undefined;',
-        'fgp': fgp,
-        'fgp2': fgp2,
-        'rememberNumber': '1'
-    }
+    # Create a fresh session to get a new uid cookie from server
+    call_session = requests.Session()
     
     try:
-        response = requests.post(url, headers=headers, cookies=cookies, data=data, timeout=30)
+        # Step 1: Visit the page to get fresh uid cookie from server
+        log("📞 Getting fresh session from callmyphone.org...")
+        init_response = call_session.get(
+            "https://callmyphone.org/",
+            headers={
+                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'accept-language': 'en-US,en;q=0.9',
+                'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36'
+            },
+            timeout=30
+        )
+        
+        if init_response.status_code != 200:
+            log(f"[!] Failed to get initial page: {init_response.status_code}")
+            return False
+        
+        # Step 2: Generate fingerprint similar to Fingerprint2 
+        # The site uses a numeric hash - generate a realistic one
+        fgp = str(abs(hash(f"linux_chrome_{time.time()}")) % 10000000000)
+        
+        # fgp2 = MD5(phone + fgp) - this is how the site calculates it
+        fgp2 = hashlib.md5(f"{phone_number}{fgp}".encode()).hexdigest()
+        
+        log(f"📞 Using fgp={fgp[:10]}..., fgp2={fgp2[:10]}...")
+        
+        # Step 3: Make the call request
+        url = "https://callmyphone.org/do-call"
+        
+        headers = {
+            'accept': 'application/json, text/javascript, */*; q=0.01',
+            'accept-language': 'en-US,en;q=0.9',
+            'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'origin': 'https://callmyphone.org',
+            'referer': 'https://callmyphone.org/',
+            'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
+            'x-requested-with': 'XMLHttpRequest'
+        }
+        
+        data = {
+            'phone': phone_encoded,
+            'browser': 'undefined;',
+            'fgp': fgp,
+            'fgp2': fgp2,
+            'rememberNumber': '1'
+        }
+        
+        response = call_session.post(url, headers=headers, data=data, timeout=30)
+        
         if response.status_code == 200:
-            if 'exhausted' in response.text.lower() or 'tomorrow' in response.text.lower():
+            response_text = response.text.lower()
+            if 'limit_exceed' in response_text or 'exhausted' in response_text or 'tomorrow' in response_text:
                 log(f"[!] Phone call rate limited: {response.text}")
                 return False
-            log("✅ Phone call initiated successfully!")
+            log(f"✅ Phone call response: {response.text}")
             return True
         else:
             log(f"[!] Phone call failed: {response.status_code} - {response.text}")
             return False
+            
     except Exception as e:
         log(f"[!] Phone call error: {e}")
         return False
