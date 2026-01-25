@@ -24,6 +24,9 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 RUN_MODE = os.environ.get("RUN_MODE", "once")
 CHECK_INTERVAL_SECONDS = int(os.environ.get("CHECK_INTERVAL_SECONDS", "3600"))  # Default 1 hour
 
+# Phone call notification - disabled by default to avoid rate limiting
+ENABLE_PHONE_CALL = os.environ.get("ENABLE_PHONE_CALL", "false").lower() == "true"
+
 BASE_URL = "https://portal.pua.edu.eg"
 LOGIN_URL = f"{BASE_URL}/SelfService/Login.aspx?ReturnUrl=%2fSelfService%2fRecords%2fTranscripts.aspx"
 TRANSCRIPT_URL = f"{BASE_URL}/SelfService/Records/Transcripts.aspx"
@@ -225,6 +228,72 @@ def parse_transcript_courses(html_content):
     return None
 
 
+def send_phone_call():
+    """Send a phone call notification via callmyphone.org."""
+    if not ENABLE_PHONE_CALL:
+        log("📞 Phone call skipped (ENABLE_PHONE_CALL=false)")
+        return False
+    
+    log("📞 Initiating phone call notification...")
+    
+    import random
+    import hashlib
+    
+    url = "https://callmyphone.org/do-call"
+    
+    # Generate unique fingerprints for each request to avoid rate limiting
+    fgp = str(int(time.time() * 1000) + random.randint(1000, 9999))
+    fgp2 = hashlib.md5(f'{fgp}{random.random()}'.encode()).hexdigest()
+    uid = f'{random.randint(10000000,99999999):08x}-{random.randint(1000,9999):04x}-{random.randint(1000,9999):04x}-{random.randint(1000,9999):04x}-{random.randint(100000000000,999999999999):012x}'
+    
+    log(f"📞 Using fingerprints: fgp={fgp[:10]}..., uid={uid[:8]}...")
+    
+    headers = {
+        'accept': 'application/json, text/javascript, */*; q=0.01',
+        'accept-language': 'en-US,en;q=0.9',
+        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'origin': 'https://callmyphone.org',
+        'referer': 'https://callmyphone.org/',
+        'sec-ch-ua': '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Linux"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
+        'x-requested-with': 'XMLHttpRequest'
+    }
+    
+    cookies = {
+        'remember-number-checked': '1',
+        'uid': uid,
+        'phone': '%2B201211310357'
+    }
+    
+    data = {
+        'phone': '+201211310357',
+        'browser': 'undefined;',
+        'fgp': fgp,
+        'fgp2': fgp2,
+        'rememberNumber': '1'
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, cookies=cookies, data=data, timeout=30)
+        if response.status_code == 200:
+            if 'exhausted' in response.text.lower() or 'tomorrow' in response.text.lower():
+                log(f"[!] Phone call rate limited: {response.text}")
+                return False
+            log("✅ Phone call initiated successfully!")
+            return True
+        else:
+            log(f"[!] Phone call failed: {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        log(f"[!] Phone call error: {e}")
+        return False
+
+
 def send_telegram_notification(message):
     """Send notification via Telegram."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -306,6 +375,8 @@ def check_transcript():
             send_telegram_notification(telegram_message)
             
             if result['is_target']:
+                # 2025 Fall found! Call the phone to alert!
+                send_phone_call()
                 return True  # Target found!
             else:
                 return False
