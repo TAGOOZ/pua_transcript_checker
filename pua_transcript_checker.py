@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 import re
 import os
 import time
+import asyncio
 from datetime import datetime
 
 # Configuration - Use environment variables for sensitive data
@@ -24,9 +25,15 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 RUN_MODE = os.environ.get("RUN_MODE", "once")
 CHECK_INTERVAL_SECONDS = int(os.environ.get("CHECK_INTERVAL_SECONDS", "3600"))  # Default 1 hour
 
-# Phone call notification - disabled by default to avoid rate limiting
-ENABLE_PHONE_CALL = os.environ.get("ENABLE_PHONE_CALL", "false").lower() == "true"
+# Telegram ring notification - requires telegram_ring.py session setup
+ENABLE_TELEGRAM_RING = os.environ.get("ENABLE_TELEGRAM_RING", "false").lower() == "true"
+TELEGRAM_TARGET_USER = os.environ.get("TELEGRAM_TARGET_USER", "")
+TELEGRAM_RING_DURATION = int(os.environ.get("RING_DURATION", "10"))
 
+try:
+    from telegram_ring import ring_phone
+except Exception:
+    ring_phone = None
 BASE_URL = "https://portal.pua.edu.eg"
 LOGIN_URL = f"{BASE_URL}/SelfService/Login.aspx?ReturnUrl=%2fSelfService%2fRecords%2fTranscripts.aspx"
 TRANSCRIPT_URL = f"{BASE_URL}/SelfService/Records/Transcripts.aspx"
@@ -228,84 +235,31 @@ def parse_transcript_courses(html_content):
     return None
 
 
-def send_phone_call():
-    """Send a phone call notification via callmyphone.org."""
-    if not ENABLE_PHONE_CALL:
-        log("📞 Phone call skipped (ENABLE_PHONE_CALL=false)")
+def send_telegram_ring():
+    """Ring via Telegram voice call."""
+    if not ENABLE_TELEGRAM_RING:
+        log("📞 Telegram ring skipped (ENABLE_TELEGRAM_RING=false)")
         return False
-    
-    log("📞 Initiating phone call notification...")
-    
-    import hashlib
-    
-    phone_number = "+201211310357"
-    phone_encoded = "%2B201211310357"
-    
-    # Create a fresh session to get a new uid cookie from server
-    call_session = requests.Session()
-    
+    if not TELEGRAM_TARGET_USER:
+        log("[!] Telegram ring target missing (TELEGRAM_TARGET_USER)")
+        return False
+    if ring_phone is None:
+        log("[!] Telegram ring unavailable (telethon/telegram_ring not ready)")
+        return False
+
+    log("📞 Initiating Telegram ring notification...")
     try:
-        # Step 1: Visit the page to get fresh uid cookie from server
-        log("📞 Getting fresh session from callmyphone.org...")
-        init_response = call_session.get(
-            "https://callmyphone.org/",
-            headers={
-                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'accept-language': 'en-US,en;q=0.9',
-                'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36'
-            },
-            timeout=30
-        )
-        
-        if init_response.status_code != 200:
-            log(f"[!] Failed to get initial page: {init_response.status_code}")
+        return asyncio.run(ring_phone(TELEGRAM_TARGET_USER, TELEGRAM_RING_DURATION))
+    except RuntimeError:
+        # Fallback for environments with an existing event loop
+        try:
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(ring_phone(TELEGRAM_TARGET_USER, TELEGRAM_RING_DURATION))
+        except Exception as e:
+            log(f"[!] Telegram ring error: {e}")
             return False
-        
-        # Step 2: Generate fingerprint similar to Fingerprint2 
-        # The site uses a numeric hash - generate a realistic one
-        fgp = str(abs(hash(f"linux_chrome_{time.time()}")) % 10000000000)
-        
-        # fgp2 = MD5(phone + fgp) - this is how the site calculates it
-        fgp2 = hashlib.md5(f"{phone_number}{fgp}".encode()).hexdigest()
-        
-        log(f"📞 Using fgp={fgp[:10]}..., fgp2={fgp2[:10]}...")
-        
-        # Step 3: Make the call request
-        url = "https://callmyphone.org/do-call"
-        
-        headers = {
-            'accept': 'application/json, text/javascript, */*; q=0.01',
-            'accept-language': 'en-US,en;q=0.9',
-            'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'origin': 'https://callmyphone.org',
-            'referer': 'https://callmyphone.org/',
-            'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
-            'x-requested-with': 'XMLHttpRequest'
-        }
-        
-        data = {
-            'phone': phone_encoded,
-            'browser': 'undefined;',
-            'fgp': fgp,
-            'fgp2': fgp2,
-            'rememberNumber': '1'
-        }
-        
-        response = call_session.post(url, headers=headers, data=data, timeout=30)
-        
-        if response.status_code == 200:
-            response_text = response.text.lower()
-            if 'limit_exceed' in response_text or 'exhausted' in response_text or 'tomorrow' in response_text:
-                log(f"[!] Phone call rate limited: {response.text}")
-                return False
-            log(f"✅ Phone call response: {response.text}")
-            return True
-        else:
-            log(f"[!] Phone call failed: {response.status_code} - {response.text}")
-            return False
-            
     except Exception as e:
-        log(f"[!] Phone call error: {e}")
+        log(f"[!] Telegram ring error: {e}")
         return False
 
 
@@ -391,7 +345,7 @@ def check_transcript():
             
             if result['is_target']:
                 # 2025 Fall found! Call the phone to alert!
-                send_phone_call()
+                send_telegram_ring()
                 return True  # Target found!
             else:
                 return False
